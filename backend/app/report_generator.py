@@ -85,6 +85,26 @@ def generate_pdf_report(scan: Scan, findings: List[Finding], recommendations: Li
                 font-size: 24px;
                 color: #666;
             }
+            .score-interpretation {
+                margin-top: 20px;
+                padding: 15px;
+                background: white;
+                border-radius: 4px;
+                font-size: 13px;
+                line-height: 1.6;
+            }
+            .score-interpretation h3 {
+                margin-top: 0;
+                color: #0066cc;
+                font-size: 16px;
+            }
+            .score-interpretation ul {
+                margin: 10px 0;
+                padding-left: 20px;
+            }
+            .score-interpretation li {
+                margin: 5px 0;
+            }
             .summary-grid {
                 display: grid;
                 grid-template-columns: 1fr 1fr;
@@ -159,6 +179,26 @@ def generate_pdf_report(scan: Scan, findings: List[Finding], recommendations: Li
         <div class="score-section">
             <div class="score-value">{{ pq_score }}</div>
             <div class="score-level">{{ pq_level }} Risk</div>
+            <div class="score-interpretation">
+                <h3>Интерпретация PQ-Score</h3>
+                <p><strong>PQ-Score</strong> — это оценка от 0 до 100, где 100 означает идеальное состояние безопасности с поддержкой Post-Quantum Cryptography.</p>
+                <p><strong>Уровни риска:</strong></p>
+                <ul>
+                    <li><strong>80-100 (Low):</strong> Низкий риск. Система в хорошем состоянии, PQC поддерживается или отсутствуют критические проблемы.</li>
+                    <li><strong>60-79 (Medium):</strong> Средний риск. Есть проблемы, требующие внимания. Возможно отсутствие PQC поддержки.</li>
+                    <li><strong>40-59 (High):</strong> Высокий риск. Обнаружены серьезные проблемы безопасности, включая устаревшие алгоритмы или отсутствие PQC.</li>
+                    <li><strong>0-39 (Critical):</strong> Критический риск. Множество серьезных уязвимостей, отсутствие PQC, использование небезопасных алгоритмов. Требуются немедленные действия.</li>
+                </ul>
+                <p><strong>Основные факторы, влияющие на оценку:</strong></p>
+                <ul>
+                    <li>Отсутствие PQC поддержки (-30 баллов) — самый критичный фактор</li>
+                    <li>Устаревшие алгоритмы (MD5, SHA1) (-25 баллов)</li>
+                    <li>Слабые размеры ключей (-20 баллов)</li>
+                    <li>Публичная доступность (-10 баллов)</li>
+                    <li>Проблемы с сертификатами (-10 баллов)</li>
+                    <li>Уязвимые зависимости (-5 баллов)</li>
+                </ul>
+            </div>
         </div>
         
         <div class="summary-grid">
