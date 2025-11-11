@@ -66,6 +66,7 @@ class Scan(Base):
     report_path = Column(String, nullable=True)
     raw_json_path = Column(String, nullable=True)
     error_message = Column(Text, nullable=True)
+    celery_task_id = Column(String, nullable=True)  # Store Celery task ID for progress tracking
     
     project = relationship("Project", back_populates="scans")
     findings = relationship("Finding", back_populates="scan", cascade="all, delete-orphan")
@@ -84,6 +85,31 @@ class Finding(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     
     scan = relationship("Scan", back_populates="findings")
+    recommendations = relationship("Recommendation", back_populates="finding", cascade="all, delete-orphan")
+
+
+class Recommendation(Base):
+    __tablename__ = "recommendations"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    finding_id = Column(Integer, ForeignKey("findings.id"), nullable=False)
+    scan_id = Column(Integer, ForeignKey("scans.id"), nullable=False)
+    priority = Column(SQLEnum(Severity), nullable=False)  # P0, P1, P2
+    short_description = Column(Text, nullable=False)
+    technical_steps = Column(Text, nullable=False)
+    rollback_notes = Column(Text, nullable=True)
+    verification_steps = Column(Text, nullable=False)
+    effort_estimate = Column(String, nullable=False)  # Low, Medium, High or days
+    confidence_score = Column(Integer, default=80)  # 0-100
+    compliance_mapping = Column(Text, nullable=True)
+    requires_privileged_action = Column(String, default="false")  # true/false
+    status = Column(String, default="pending")  # pending, in_progress, resolved, rejected
+    analyst_notes = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    finding = relationship("Finding", back_populates="recommendations")
+    scan = relationship("Scan")
 
 
 class AuditLog(Base):

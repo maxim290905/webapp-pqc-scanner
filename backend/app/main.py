@@ -3,18 +3,18 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordBearer
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
-from datetime import timedelta
+from datetime import timedelta, datetime
 from typing import List
 import os
 
 from app.database import get_db, engine, Base
-from app.models import User, Scan, Project, Finding, AuditLog, UserRole, ScanStatus
+from app.models import User, Scan, Project, Finding, AuditLog, UserRole, ScanStatus, Recommendation
 from app.startup import init_db
 from app.schemas import (
     Token, LoginRequest, UserCreate, UserResponse,
     ProjectCreate, ProjectResponse,
     ScanCreate, ScanResponse, ScanStatusResponse, ScanResultResponse, FindingResponse,
-    AssetResponse
+    AssetResponse, RecommendationResponse, RecommendationUpdate
 )
 from app.auth import (
     verify_password, get_password_hash, create_access_token,
@@ -23,6 +23,7 @@ from app.auth import (
 from app.config import settings
 from app.celery_app import celery_app
 from app.tasks import scan_task
+from celery.result import AsyncResult
 from app.report_generator import generate_pdf_report
 from app.pq_score import calculate_pq_score
 
@@ -218,8 +219,10 @@ async def create_scan(
     db.commit()
     db.refresh(scan)
     
-    # Queue Celery task
-    scan_task.delay(scan.id)
+    # Queue Celery task and store task_id
+    task = scan_task.delay(scan.id)
+    scan.celery_task_id = task.id
+    db.commit()
     
     # Log action
     audit_log = AuditLog(
@@ -239,7 +242,7 @@ async def get_scan_status(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Get scan status"""
+    """Get scan status with progress"""
     scan = db.query(Scan).join(Project).filter(
         Scan.id == scan_id,
         Project.owner_id == current_user.id
@@ -251,13 +254,26 @@ async def get_scan_status(
             detail="Scan not found"
         )
     
+    # Get Celery task progress if scan is running
+    progress = None
+    if scan.status == ScanStatus.RUNNING and scan.celery_task_id:
+        try:
+            result = AsyncResult(scan.celery_task_id, app=celery_app)
+            if result.state == 'PROGRESS':
+                progress = result.info
+        except Exception:
+            # If we can't get progress, continue without it
+            pass
+    
     return ScanStatusResponse(
         id=scan.id,
         target=scan.target,
         status=scan.status,
+        created_at=scan.created_at,
         started_at=scan.started_at,
         finished_at=scan.finished_at,
-        error_message=scan.error_message
+        error_message=scan.error_message,
+        progress=progress
     )
 
 
@@ -286,6 +302,7 @@ async def get_scan_result(
         )
     
     findings = db.query(Finding).filter(Finding.scan_id == scan_id).all()
+    recommendations = db.query(Recommendation).filter(Recommendation.scan_id == scan_id).all()
     pq_score, pq_level = calculate_pq_score(findings)
     
     # Log action
@@ -297,9 +314,57 @@ async def get_scan_result(
     db.add(audit_log)
     db.commit()
     
+    # Convert SQLAlchemy objects to Pydantic models
+    scan_dict = {
+        "id": scan.id,
+        "project_id": scan.project_id,
+        "target": scan.target,
+        "scan_type": scan.scan_type,
+        "status": scan.status,
+        "pq_score": scan.pq_score,
+        "created_at": scan.created_at,
+        "started_at": scan.started_at,
+        "finished_at": scan.finished_at,
+    }
+    
+    findings_list = [
+        {
+            "id": f.id,
+            "asset_type": f.asset_type,
+            "detail_json": f.detail_json,
+            "severity": f.severity,
+            "category": f.category,
+            "evidence": f.evidence,
+        }
+        for f in findings
+    ]
+    
+    recommendations_list = [
+        {
+            "id": r.id,
+            "finding_id": r.finding_id,
+            "scan_id": r.scan_id,
+            "priority": r.priority,
+            "short_description": r.short_description,
+            "technical_steps": r.technical_steps,
+            "rollback_notes": r.rollback_notes,
+            "verification_steps": r.verification_steps,
+            "effort_estimate": r.effort_estimate,
+            "confidence_score": r.confidence_score,
+            "compliance_mapping": r.compliance_mapping,
+            "requires_privileged_action": r.requires_privileged_action,
+            "status": r.status,
+            "analyst_notes": r.analyst_notes,
+            "created_at": r.created_at,
+            "updated_at": r.updated_at,
+        }
+        for r in recommendations
+    ]
+    
     return ScanResultResponse(
-        scan=ScanResponse.model_validate(scan),
-        findings=[FindingResponse.model_validate(f) for f in findings],
+        scan=ScanResponse(**scan_dict),
+        findings=[FindingResponse(**f) for f in findings_list],
+        recommendations=[RecommendationResponse(**r) for r in recommendations_list],
         pq_score=pq_score,
         pq_level=pq_level,
         summary={
@@ -344,7 +409,8 @@ async def get_scan_report(
         os.makedirs(f"{settings.STORAGE_PATH}/reports", exist_ok=True)
         report_path = f"{settings.STORAGE_PATH}/reports/{scan_id}.pdf"
         findings = db.query(Finding).filter(Finding.scan_id == scan_id).all()
-        generate_pdf_report(scan, findings, report_path)
+        recommendations = db.query(Recommendation).filter(Recommendation.scan_id == scan_id).all()
+        generate_pdf_report(scan, findings, recommendations, report_path)
         
         # Update scan record
         scan.report_path = report_path
@@ -413,4 +479,146 @@ async def list_assets(
         ))
     
     return assets
+
+
+# Recommendation endpoints
+@app.put("/api/recommendations/{recommendation_id}", response_model=RecommendationResponse)
+async def update_recommendation(
+    recommendation_id: int,
+    update_data: RecommendationUpdate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Update recommendation (analyst can edit)"""
+    recommendation = db.query(Recommendation).join(Scan).join(Project).filter(
+        Recommendation.id == recommendation_id,
+        Project.owner_id == current_user.id
+    ).first()
+    
+    if not recommendation:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Recommendation not found"
+        )
+    
+    if update_data.technical_steps is not None:
+        recommendation.technical_steps = update_data.technical_steps
+    if update_data.effort_estimate is not None:
+        recommendation.effort_estimate = update_data.effort_estimate
+    if update_data.analyst_notes is not None:
+        recommendation.analyst_notes = update_data.analyst_notes
+    if update_data.status is not None:
+        recommendation.status = update_data.status
+    
+    recommendation.updated_at = datetime.utcnow()
+    db.commit()
+    db.refresh(recommendation)
+    
+    # Log action
+    audit_log = AuditLog(
+        user_id=current_user.id,
+        action="recommendation_updated",
+        details={"recommendation_id": recommendation_id}
+    )
+    db.add(audit_log)
+    db.commit()
+    
+    rec_dict = {
+        "id": recommendation.id,
+        "finding_id": recommendation.finding_id,
+        "scan_id": recommendation.scan_id,
+        "priority": recommendation.priority,
+        "short_description": recommendation.short_description,
+        "technical_steps": recommendation.technical_steps,
+        "rollback_notes": recommendation.rollback_notes,
+        "verification_steps": recommendation.verification_steps,
+        "effort_estimate": recommendation.effort_estimate,
+        "confidence_score": recommendation.confidence_score,
+        "compliance_mapping": recommendation.compliance_mapping,
+        "requires_privileged_action": recommendation.requires_privileged_action,
+        "status": recommendation.status,
+        "analyst_notes": recommendation.analyst_notes,
+        "created_at": recommendation.created_at,
+        "updated_at": recommendation.updated_at,
+    }
+    
+    return RecommendationResponse(**rec_dict)
+
+
+@app.get("/api/scans/{scan_id}/recommendations/export")
+async def export_recommendations(
+    scan_id: int,
+    format: str = "json",  # json, jira, github, csv
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Export recommendations in various formats"""
+    scan = db.query(Scan).join(Project).filter(
+        Scan.id == scan_id,
+        Project.owner_id == current_user.id
+    ).first()
+    
+    if not scan:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Scan not found"
+        )
+    
+    recommendations = db.query(Recommendation).filter(Recommendation.scan_id == scan_id).all()
+    
+    if format == "json":
+        return {
+            "scan_id": scan_id,
+            "target": scan.target,
+            "recommendations": [
+                {
+                    "id": r.id,
+                    "finding_id": r.finding_id,
+                    "priority": r.priority.value,
+                    "short_description": r.short_description,
+                    "technical_steps": r.technical_steps,
+                    "effort_estimate": r.effort_estimate,
+                    "status": r.status,
+                }
+                for r in recommendations
+            ]
+        }
+    elif format == "jira":
+        # Jira JSON format
+        issues = []
+        for r in recommendations:
+            issues.append({
+                "fields": {
+                    "project": {"key": "SEC"},  # Should be configurable
+                    "summary": f"[{r.priority.value}] {r.short_description}",
+                    "description": f"{r.technical_steps}\n\nEffort: {r.effort_estimate}\nConfidence: {r.confidence_score}%",
+                    "issuetype": {"name": "Task"},
+                    "priority": {"name": "High" if r.priority.value == "P0" else "Medium"},
+                }
+            })
+        return {"issues": issues}
+    elif format == "github":
+        # GitHub issues format
+        issues = []
+        for r in recommendations:
+            issues.append({
+                "title": f"[{r.priority.value}] {r.short_description}",
+                "body": f"## Technical Steps\n\n{r.technical_steps}\n\n## Effort Estimate\n{r.effort_estimate}\n\n## Verification Steps\n{r.verification_steps}",
+                "labels": [r.priority.value, "security", "crypto"],
+            })
+        return {"issues": issues}
+    elif format == "csv":
+        # CSV format (return as JSON for now, can be converted to CSV in frontend)
+        return {
+            "headers": ["ID", "Priority", "Description", "Effort", "Status"],
+            "rows": [
+                [r.id, r.priority.value, r.short_description, r.effort_estimate, r.status]
+                for r in recommendations
+            ]
+        }
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Unsupported format: {format}"
+        )
 

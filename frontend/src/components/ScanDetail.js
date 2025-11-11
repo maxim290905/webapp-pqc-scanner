@@ -17,7 +17,7 @@ function ScanDetail() {
     if (polling && scan && (scan.status === 'queued' || scan.status === 'running')) {
       const interval = setInterval(() => {
         fetchScan();
-      }, 3000);
+      }, 2000); // Poll more frequently for progress updates
       return () => clearInterval(interval);
     }
   }, [polling, scan]);
@@ -80,6 +80,23 @@ function ScanDetail() {
       link.remove();
     } catch (err) {
       alert('Failed to download JSON');
+    }
+  };
+
+  const downloadRecommendations = async (format) => {
+    try {
+      const response = await api.get(`/api/scans/${id}/recommendations/export?format=${format}`);
+      const dataStr = JSON.stringify(response.data, null, 2);
+      const dataBlob = new Blob([dataStr], { type: 'application/json' });
+      const url = window.URL.createObjectURL(dataBlob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.setAttribute('download', `scan_${id}_recommendations_${format}.json`);
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+    } catch (err) {
+      alert(`Failed to export recommendations as ${format}`);
     }
   };
 
@@ -192,12 +209,149 @@ function ScanDetail() {
                 </tbody>
               </table>
             </div>
+
+            {result.recommendations && result.recommendations.length > 0 && (
+              <div className="card" style={{ marginTop: '20px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
+                  <h3>Recommendations</h3>
+                  <div>
+                    <button 
+                      className="btn btn-secondary" 
+                      onClick={() => downloadRecommendations('json')}
+                      style={{ marginRight: '5px', padding: '5px 10px', fontSize: '12px' }}
+                    >
+                      Export JSON
+                    </button>
+                    <button 
+                      className="btn btn-secondary" 
+                      onClick={() => downloadRecommendations('jira')}
+                      style={{ marginRight: '5px', padding: '5px 10px', fontSize: '12px' }}
+                    >
+                      Export Jira
+                    </button>
+                    <button 
+                      className="btn btn-secondary" 
+                      onClick={() => downloadRecommendations('github')}
+                      style={{ padding: '5px 10px', fontSize: '12px' }}
+                    >
+                      Export GitHub
+                    </button>
+                  </div>
+                </div>
+                {result.recommendations.map((rec) => (
+                  <div key={rec.id} style={{ 
+                    border: '1px solid #ddd', 
+                    borderRadius: '4px', 
+                    padding: '15px', 
+                    marginBottom: '15px',
+                    background: rec.priority === 'P0' ? '#fff5f5' : rec.priority === 'P1' ? '#fffbf0' : '#f8f9fa'
+                  }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', marginBottom: '10px' }}>
+                      <div>
+                        <span className={`badge ${
+                          rec.priority === 'P0' ? 'badge-danger' :
+                          rec.priority === 'P1' ? 'badge-warning' :
+                          rec.priority === 'P2' ? 'badge-info' : 'badge-secondary'
+                        }`} style={{ marginRight: '10px' }}>
+                          {rec.priority}
+                        </span>
+                        <strong>{rec.short_description}</strong>
+                      </div>
+                      <span className="badge badge-info">{rec.status}</span>
+                    </div>
+                    <div style={{ marginTop: '10px' }}>
+                      <p><strong>Effort:</strong> {rec.effort_estimate}</p>
+                      <p><strong>Confidence:</strong> {rec.confidence_score}%</p>
+                    </div>
+                    <details style={{ marginTop: '10px' }}>
+                      <summary style={{ cursor: 'pointer', fontWeight: 'bold' }}>Technical Steps</summary>
+                      <pre style={{ 
+                        background: '#f5f5f5', 
+                        padding: '10px', 
+                        borderRadius: '4px', 
+                        marginTop: '10px',
+                        whiteSpace: 'pre-wrap',
+                        fontSize: '12px'
+                      }}>{rec.technical_steps}</pre>
+                    </details>
+                    {rec.verification_steps && (
+                      <details style={{ marginTop: '10px' }}>
+                        <summary style={{ cursor: 'pointer', fontWeight: 'bold' }}>Verification Steps</summary>
+                        <pre style={{ 
+                          background: '#f5f5f5', 
+                          padding: '10px', 
+                          borderRadius: '4px', 
+                          marginTop: '10px',
+                          whiteSpace: 'pre-wrap',
+                          fontSize: '12px'
+                        }}>{rec.verification_steps}</pre>
+                      </details>
+                    )}
+                    {rec.rollback_notes && (
+                      <details style={{ marginTop: '10px' }}>
+                        <summary style={{ cursor: 'pointer', fontWeight: 'bold' }}>Rollback Notes</summary>
+                        <p style={{ marginTop: '10px' }}>{rec.rollback_notes}</p>
+                      </details>
+                    )}
+                    {rec.compliance_mapping && (
+                      <p style={{ marginTop: '10px', fontSize: '12px', color: '#666' }}>
+                        <strong>Compliance:</strong> {rec.compliance_mapping}
+                      </p>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
           </>
         )}
 
         {(scan.status === 'queued' || scan.status === 'running') && (
-          <div className="loading">
-            Scan in progress... This page will auto-refresh.
+          <div className="card" style={{ marginTop: '20px' }}>
+            <h3>Сканирование в процессе...</h3>
+            {scan.progress && (
+              <div style={{ marginTop: '15px' }}>
+                <div style={{ 
+                  background: '#f0f0f0', 
+                  borderRadius: '4px', 
+                  height: '24px', 
+                  marginBottom: '10px',
+                  overflow: 'hidden'
+                }}>
+                  <div style={{
+                    background: scan.progress.progress >= 80 ? '#28a745' : 
+                               scan.progress.progress >= 50 ? '#ffc107' : '#007bff',
+                    height: '100%',
+                    width: `${scan.progress.progress || 0}%`,
+                    transition: 'width 0.3s ease',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    color: 'white',
+                    fontSize: '12px',
+                    fontWeight: 'bold'
+                  }}>
+                    {scan.progress.progress ? `${scan.progress.progress}%` : ''}
+                  </div>
+                </div>
+                <div style={{ 
+                  padding: '10px', 
+                  background: '#f8f9fa', 
+                  borderRadius: '4px',
+                  fontSize: '14px'
+                }}>
+                  <strong>Этап:</strong> {scan.progress.stage || 'unknown'}<br/>
+                  <strong>Статус:</strong> {scan.progress.message || 'Выполняется...'}
+                </div>
+              </div>
+            )}
+            {!scan.progress && (
+              <div style={{ marginTop: '15px', color: '#666' }}>
+                Ожидание начала сканирования...
+              </div>
+            )}
+            <div style={{ marginTop: '15px', fontSize: '12px', color: '#999' }}>
+              Страница автоматически обновится при завершении
+            </div>
           </div>
         )}
       </div>

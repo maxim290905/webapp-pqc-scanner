@@ -3,11 +3,11 @@ from datetime import datetime
 from typing import List
 from jinja2 import Template
 from weasyprint import HTML
-from app.models import Scan, Finding
+from app.models import Scan, Finding, Recommendation
 from app.pq_score import get_top_findings, estimate_effort
 
 
-def generate_pdf_report(scan: Scan, findings: List[Finding], output_path: str):
+def generate_pdf_report(scan: Scan, findings: List[Finding], recommendations: List[Recommendation], output_path: str):
     """Generate PDF executive summary report"""
     
     # Get PQ score and level
@@ -16,6 +16,21 @@ def generate_pdf_report(scan: Scan, findings: List[Finding], output_path: str):
     
     # Get top findings
     top_findings = get_top_findings(findings, limit=3)
+    
+    # Get top P0 recommendations
+    top_recommendations = sorted(
+        [r for r in recommendations if r.priority.value == "P0"],
+        key=lambda x: x.confidence_score,
+        reverse=True
+    )[:3]
+    if len(top_recommendations) < 3:
+        # Add P1 if not enough P0
+        p1_recs = sorted(
+            [r for r in recommendations if r.priority.value == "P1"],
+            key=lambda x: x.confidence_score,
+            reverse=True
+        )[:3 - len(top_recommendations)]
+        top_recommendations.extend(p1_recs)
     
     # Estimate effort
     effort = estimate_effort(pq_score, len(findings))
@@ -91,11 +106,14 @@ def generate_pdf_report(scan: Scan, findings: List[Finding], output_path: str):
             }
             .finding-item {
                 background: #fff;
-                border-left: 4px solid {% if finding.severity == 'P0' %}#d32f2f{% elif finding.severity == 'P1' %}#f57c00{% elif finding.severity == 'P2' %}#fbc02d{% else %}#388e3c{% endif %};
                 padding: 15px;
                 margin: 10px 0;
                 border-radius: 4px;
             }
+            .finding-item-p0 { border-left: 4px solid #d32f2f; }
+            .finding-item-p1 { border-left: 4px solid #f57c00; }
+            .finding-item-p2 { border-left: 4px solid #fbc02d; }
+            .finding-item-p3 { border-left: 4px solid #388e3c; }
             .finding-severity {
                 display: inline-block;
                 padding: 4px 8px;
@@ -162,7 +180,7 @@ def generate_pdf_report(scan: Scan, findings: List[Finding], output_path: str):
         <div class="findings-section">
             <h2>Top Findings</h2>
             {% for finding in top_findings %}
-            <div class="finding-item">
+            <div class="finding-item finding-item-{{ finding.severity|lower }}">
                 <span class="finding-severity severity-{{ finding.severity|lower }}">{{ finding.severity }}</span>
                 <strong>{{ finding.category }}</strong>
                 <p>{{ finding.evidence }}</p>
@@ -171,20 +189,20 @@ def generate_pdf_report(scan: Scan, findings: List[Finding], output_path: str):
         </div>
         
         <div class="recommendations">
-            <h2>Recommendations</h2>
-            <ul>
-                {% if severity_counts.P0 > 0 %}
-                <li>Immediately address {{ severity_counts.P0 }} critical finding(s) - expired certificates, weak keys, or deprecated algorithms</li>
-                {% endif %}
-                {% if severity_counts.P1 > 0 %}
-                <li>Plan remediation for {{ severity_counts.P1 }} high-severity finding(s) within 1-2 weeks</li>
-                {% endif %}
-                {% if severity_counts.P2 > 0 or severity_counts.P3 > 0 %}
-                <li>Schedule fixes for {{ severity_counts.P2 + severity_counts.P3 }} medium/low findings in next maintenance window</li>
-                {% endif %}
-                <li>Implement certificate lifecycle management to prevent expiry issues</li>
-                <li>Review and update cryptographic configurations to use modern algorithms</li>
-            </ul>
+            <h2>Top Recommendations (P0 Priority)</h2>
+            {% for rec in top_recommendations %}
+            <div style="background: white; padding: 15px; margin: 10px 0; border-radius: 4px; border-left: 4px solid {% if rec.priority == 'P0' %}#d32f2f{% elif rec.priority == 'P1' %}#f57c00{% else %}#fbc02d{% endif %};">
+                <p><strong>[{{ rec.priority }}] {{ rec.short_description }}</strong></p>
+                <p><strong>Effort:</strong> {{ rec.effort_estimate }} | <strong>Confidence:</strong> {{ rec.confidence_score }}%</p>
+                <details style="margin-top: 10px;">
+                    <summary style="cursor: pointer; font-weight: bold;">Technical Steps</summary>
+                    <pre style="background: #f5f5f5; padding: 10px; margin-top: 5px; white-space: pre-wrap; font-size: 11px;">{{ rec.technical_steps }}</pre>
+                </details>
+            </div>
+            {% endfor %}
+            {% if recommendations|length > 3 %}
+            <p style="margin-top: 15px; font-style: italic;">... and {{ recommendations|length - 3 }} more recommendations. See full report for details.</p>
+            {% endif %}
         </div>
         
         <div class="footer">
@@ -206,6 +224,8 @@ def generate_pdf_report(scan: Scan, findings: List[Finding], output_path: str):
         total_findings=len(findings),
         severity_counts=severity_counts,
         top_findings=top_findings,
+        top_recommendations=top_recommendations,
+        recommendations=recommendations,
         effort=effort,
         generated_at=datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
     )

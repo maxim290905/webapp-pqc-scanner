@@ -6,29 +6,30 @@ def calculate_pq_score(findings: List[Finding]) -> tuple[float, str]:
     """
     Calculate PQ-score based on findings.
     Returns: (score, level) where level is "Low", "Medium", "High", or "Critical"
+    Score is 0-100, where 100 is best (no issues, PQC supported)
     """
     if not findings:
-        return 0.0, "Low"
+        return 100.0, "Low"  # No findings = perfect score
     
-    # Component weights
+    # Component weights (negative impact)
     WEIGHTS = {
-        "deprecated_alg": 0.35,
-        "weak_key": 0.25,
-        "public_exposure": 0.20,
+        "no_pqc_support": 0.30,  # Missing PQC support is critical
+        "deprecated_alg": 0.25,
+        "weak_key": 0.20,
+        "public_exposure": 0.10,
         "cert_lifecycle": 0.10,
-        "vulnerable_deps": 0.10,
+        "vulnerable_deps": 0.05,
     }
     
-    # Initialize component scores
+    # Initialize component scores (0 = no issue, 1 = max issue)
     component_scores = {key: 0.0 for key in WEIGHTS.keys()}
     
-    # Count findings by category
-    category_counts = {}
+    # Check for PQC support
+    has_pqc = False
+    has_hybrid_only = False
+    
     for finding in findings:
         category = finding.category
-        if category not in category_counts:
-            category_counts[category] = 0
-        category_counts[category] += 1
         
         # Map severity to score contribution
         severity_score = {
@@ -38,28 +39,35 @@ def calculate_pq_score(findings: List[Finding]) -> tuple[float, str]:
             Severity.P3: 0.25,
         }.get(finding.severity, 0.0)
         
-        # Add to appropriate component
-        if category in ["deprecated_alg", "weak_cipher", "md5", "sha1"]:
-            component_scores["deprecated_alg"] = min(1.0, component_scores["deprecated_alg"] + severity_score * 0.1)
+        # Check PQC status
+        if category == "no_pqc_support":
+            component_scores["no_pqc_support"] = 1.0  # Full penalty
+        elif category == "pqc_hybrid_only":
+            component_scores["no_pqc_support"] = 0.5  # Partial penalty
+            has_hybrid_only = True
+        elif category in ["deprecated_alg", "weak_cipher", "md5", "sha1"]:
+            component_scores["deprecated_alg"] = min(1.0, component_scores["deprecated_alg"] + severity_score * 0.2)
         elif category in ["weak_key", "small_rsa", "weak_ec_curve"]:
-            component_scores["weak_key"] = min(1.0, component_scores["weak_key"] + severity_score * 0.1)
+            component_scores["weak_key"] = min(1.0, component_scores["weak_key"] + severity_score * 0.2)
         elif category == "public_exposure":
-            component_scores["public_exposure"] = min(1.0, component_scores["public_exposure"] + severity_score)
+            component_scores["public_exposure"] = min(1.0, component_scores["public_exposure"] + severity_score * 0.3)
         elif category in ["cert_expiry", "cert_expired", "cert_near_expiry"]:
-            component_scores["cert_lifecycle"] = min(1.0, component_scores["cert_lifecycle"] + severity_score * 0.2)
+            component_scores["cert_lifecycle"] = min(1.0, component_scores["cert_lifecycle"] + severity_score * 0.3)
         elif category == "vulnerable_deps":
             component_scores["vulnerable_deps"] = min(1.0, component_scores["vulnerable_deps"] + severity_score)
     
-    # Calculate weighted sum
-    total_score = sum(component_scores[comp] * weight for comp, weight in WEIGHTS.items())
-    pq_score = round(total_score * 100)
+    # Calculate weighted penalty (0-1)
+    total_penalty = sum(component_scores[comp] * weight for comp, weight in WEIGHTS.items())
     
-    # Determine level
-    if pq_score <= 30:
+    # Convert to score (100 = perfect, 0 = worst)
+    pq_score = max(0, round((1.0 - total_penalty) * 100))
+    
+    # Determine level based on score
+    if pq_score >= 80:
         level = "Low"
-    elif pq_score <= 60:
+    elif pq_score >= 60:
         level = "Medium"
-    elif pq_score <= 85:
+    elif pq_score >= 40:
         level = "High"
     else:
         level = "Critical"

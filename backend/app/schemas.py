@@ -71,9 +71,11 @@ class ScanStatusResponse(BaseModel):
     id: int
     target: str
     status: ScanStatus
+    created_at: Optional[datetime] = None
     started_at: Optional[datetime] = None
     finished_at: Optional[datetime] = None
     error_message: Optional[str] = None
+    progress: Optional[Dict[str, Any]] = None
 
 
 class FindingResponse(BaseModel):
@@ -85,9 +87,36 @@ class FindingResponse(BaseModel):
     evidence: Optional[str] = None
 
 
+class RecommendationResponse(BaseModel):
+    id: int
+    finding_id: int
+    scan_id: int
+    priority: Severity
+    short_description: str
+    technical_steps: str
+    rollback_notes: Optional[str] = None
+    verification_steps: str
+    effort_estimate: str
+    confidence_score: int
+    compliance_mapping: Optional[str] = None
+    requires_privileged_action: str
+    status: str
+    analyst_notes: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class RecommendationUpdate(BaseModel):
+    technical_steps: Optional[str] = None
+    effort_estimate: Optional[str] = None
+    analyst_notes: Optional[str] = None
+    status: Optional[str] = None
+
+
 class ScanResultResponse(BaseModel):
     scan: ScanResponse
     findings: List[FindingResponse]
+    recommendations: List[RecommendationResponse]
     pq_score: Optional[float] = None
     pq_level: Optional[str] = None  # Low, Medium, High, Critical
     summary: Dict[str, Any]

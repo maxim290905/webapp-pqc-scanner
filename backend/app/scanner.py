@@ -5,14 +5,25 @@ import os
 from datetime import datetime
 from typing import Dict, Any, List
 from app.models import Finding, Severity
+from app.pqc_scanner import PQCScanner
 
 
 class Scanner:
-    def __init__(self, target: str, timeout: int = 300):
+    def __init__(self, target: str, timeout: int = 300, progress_callback=None):
         self.target = target
         self.timeout = timeout
         self.testssl_path = "/opt/testssl.sh/testssl.sh"
         self.findings: List[Dict[str, Any]] = []
+        self.progress_callback = progress_callback
+    
+    def _update_progress(self, stage: str, message: str, progress: int = None):
+        """Update scan progress"""
+        if self.progress_callback:
+            self.progress_callback({
+                "stage": stage,
+                "message": message,
+                "progress": progress
+            })
     
     def run_testssl(self) -> Dict[str, Any]:
         """Run testssl.sh and parse results"""
@@ -56,21 +67,38 @@ class Scanner:
             return {"success": False, "error": str(e)}
     
     def run_nmap(self) -> Dict[str, Any]:
-        """Run nmap scan"""
+        """Run nmap scan - optimized for TLS/SSL ports only"""
         try:
+            # Extract host and port from target
+            if ':' in self.target:
+                host, port_str = self.target.rsplit(':', 1)
+                port = int(port_str)
+                ports_to_scan = str(port)
+            else:
+                host = self.target
+                # Scan only common TLS/SSL ports for faster execution
+                ports_to_scan = "443,8443,636,989,990,992,993,994,995"
+            
             cmd = [
                 "nmap",
-                "-sV",
+                "-Pn",  # Skip host discovery (assume host is up) - saves time
+                "-sT",  # TCP connect scan (faster, doesn't require root)
+                "-p", ports_to_scan,  # Only scan specific ports
                 "--script", "ssl-enum-ciphers,ssl-cert",
+                "--script-timeout", "10s",  # Timeout for scripts (10 seconds max per script)
+                "--host-timeout", "30s",  # Timeout per host (30 seconds max)
+                "-T4",  # Aggressive timing template (faster scanning)
                 "-oJ", "-",
-                self.target
+                host
             ]
+            
+            self._update_progress("nmap", f"Сканирование портов {ports_to_scan} на {host}...", None)
             
             result = subprocess.run(
                 cmd,
                 capture_output=True,
                 text=True,
-                timeout=self.timeout,
+                timeout=60,  # Reduced timeout for nmap (60 seconds max)
                 check=False
             )
             
@@ -222,15 +250,23 @@ class Scanner:
         """Run full scan and return results"""
         all_findings = []
         
+        self._update_progress("initializing", "Инициализация сканирования...", 0)
+        
         # Run testssl.sh
+        self._update_progress("testssl", f"Запуск testssl.sh для {self.target}...", 10)
         testssl_result = self.run_testssl()
+        self._update_progress("testssl_parse", "Парсинг результатов testssl.sh...", 30)
         testssl_findings = self.parse_testssl_results(testssl_result)
         all_findings.extend(testssl_findings)
+        self._update_progress("testssl_done", f"Найдено {len(testssl_findings)} проблем в TLS конфигурации", 40)
         
         # Run nmap
+        self._update_progress("nmap", f"Запуск nmap для {self.target}...", 45)
         nmap_result = self.run_nmap()
+        self._update_progress("nmap_parse", "Парсинг результатов nmap...", 50)
         nmap_findings = self.parse_nmap_results(nmap_result)
         all_findings.extend(nmap_findings)
+        self._update_progress("nmap_done", f"Найдено {len(nmap_findings)} проблем в сетевой конфигурации", 55)
         
         # Add public exposure finding (assuming internet-facing)
         all_findings.append({
@@ -240,6 +276,63 @@ class Scanner:
             "detail_json": {"target": self.target},
             "evidence": f"Target {self.target} is publicly accessible"
         })
+        
+        # Run PQC scan
+        self._update_progress("pqc_init", "Инициализация PQC сканирования...", 60)
+        try:
+            pqc_scanner = PQCScanner()
+            # Extract host and port from target
+            if ':' in self.target:
+                host, port_str = self.target.rsplit(':', 1)
+                port = int(port_str)
+            else:
+                host = self.target
+                port = 443
+            
+            self._update_progress("pqc_scan", f"Сканирование PQC алгоритмов для {host}:{port}...", 65)
+            
+            # Create PQC progress callback
+            def pqc_progress(message):
+                self._update_progress("pqc_scan", message, None)
+            
+            pqc_result = pqc_scanner.scan_target(host, port, hybrid_only=False, timeout=5.0, progress_callback=pqc_progress)
+            
+            # Add PQC findings
+            if not pqc_result.get("pqc_supported", False):
+                self._update_progress("pqc_result", "PQC поддержка не обнаружена", 80)
+                all_findings.append({
+                    "asset_type": "tls",
+                    "category": "no_pqc_support",
+                    "severity": Severity.P1,
+                    "detail_json": {
+                        "target": self.target,
+                        "pqc_algos": pqc_result.get("pqc_algos", []),
+                        "hybrid_algos": pqc_result.get("hybrid_algos", [])
+                    },
+                    "evidence": f"Target {self.target} does not support Post-Quantum Cryptography algorithms"
+                })
+            elif pqc_result.get("hybrid_algos"):
+                self._update_progress("pqc_result", f"Обнаружены hybrid PQC алгоритмы: {', '.join(pqc_result.get('hybrid_algos', [])[:3])}", 80)
+                # Has hybrid but might need pure PQC
+                all_findings.append({
+                    "asset_type": "tls",
+                    "category": "pqc_hybrid_only",
+                    "severity": Severity.P2,
+                    "detail_json": {
+                        "target": self.target,
+                        "hybrid_algos": pqc_result.get("hybrid_algos", []),
+                        "pqc_algos": pqc_result.get("pqc_algos", [])
+                    },
+                    "evidence": f"Target {self.target} supports hybrid PQC algorithms: {', '.join(pqc_result.get('hybrid_algos', []))}"
+                })
+            else:
+                self._update_progress("pqc_result", f"Обнаружены PQC алгоритмы: {', '.join(pqc_result.get('pqc_algos', [])[:3])}", 80)
+        except Exception as e:
+            self._update_progress("pqc_error", f"Ошибка PQC сканирования: {str(e)}", 80)
+            # PQC scan failed, but continue
+            pass
+        
+        self._update_progress("finalizing", f"Завершение сканирования. Всего найдено: {len(all_findings)} проблем", 90)
         
         return {
             "findings": all_findings,

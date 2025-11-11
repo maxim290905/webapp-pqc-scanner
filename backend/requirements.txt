@@ -10,7 +10,7 @@ passlib[bcrypt]==1.7.4
 python-multipart==0.0.6
 celery==5.3.4
 redis==5.0.1
-weasyprint==60.1
+weasyprint==62.3
 jinja2==3.1.2
 aiofiles==23.2.1
 python-dateutil==2.8.2

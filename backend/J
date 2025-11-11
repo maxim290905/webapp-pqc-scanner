@@ -1,3 +1,29 @@
-# Nmap 7.95 scan initiated Tue Nov 11 19:12:48 2025 as: nmap -sV --script ssl-enum-ciphers,ssl-cert -oJ - google.com
+# Nmap 7.95 scan initiated Tue Nov 11 20:52:03 2025 as: nmap -Pn -sT -p 443,8443,636,989,990,992,993,994,995 --script ssl-enum-ciphers,ssl-cert --script-timeout 10s --host-timeout 30s -T4 -oJ - ya.ru
 Failed to resolve "-".
 Bare '-': did you put a space between '--'?
+Nmap scan report for ya.ru (5.255.255.242)
+Host is up (0.014s latency).
+Other addresses for ya.ru (not scanned): 77.88.44.242 77.88.55.242 2a02:6b8::2:242
+
+PORT     STATE    SERVICE
+443/tcp  open     https
+| ssl-cert: Subject: commonName=*.yandex.tr/organizationName=YANDEX LLC/stateOrProvinceName=Moscow/countryName=RU
+| Subject Alternative Name: DNS:*.yandex.tr, DNS:xn--d1acpjx3f.xn--p1ai, DNS:*.xn--d1acpjx3f.xn--p1ai, DNS:yandex.aero, DNS:*.yandex.aero, DNS:yandex.jobs, DNS:*.yandex.jobs, DNS:yandex.net, DNS:*.yandex.net, DNS:yandex.org, DNS:*.yandex.org, DNS:yandex.de, DNS:*.yandex.de, DNS:ya.ru, DNS:*.ya.ru, DNS:yandex.it, DNS:*.yandex.it, DNS:yandex.uz, DNS:*.yandex.uz, DNS:yandex.tm, DNS:*.yandex.tm, DNS:yandex.tj, DNS:*.yandex.tj, DNS:yandex.ru, DNS:*.yandex.ru, DNS:yandex.md, DNS:*.yandex.md, DNS:yandex.lv, DNS:*.yandex.lv, DNS:yandex.lt, DNS:*.yandex.lt, DNS:yandex.kz, DNS:*.yandex.kz, DNS:yandex.fr, DNS:*.yandex.fr, DNS:yandex.ee, DNS:*.yandex.ee, DNS:yandex.com.tr, DNS:*.yandex.com.tr, DNS:yandex.com.ge, DNS:*.yandex.com.ge, DNS:yandex.com.am, DNS:*.yandex.com.am, DNS:yandex.com, DNS:*.yandex.com, DNS:yandex.co.il, DNS:*.yandex.co.il, DNS:yandex.by, DNS:*.yandex.by, DNS:yandex.az, DNS:*.yandex.az, DNS:yandex.tr
+| Issuer: commonName=GlobalSign ECC OV SSL CA 2018/organizationName=GlobalSign nv-sa/countryName=BE
+| Public Key type: ec
+| Public Key bits: 256
+| Signature Algorithm: ecdsa-with-SHA384
+| Not valid before: 2025-08-26T08:03:35
+| Not valid after:  2026-02-23T20:59:59
+| MD5:   30b9:a58b:9d5c:44fa:e865:185e:5d32:7bdd
+|_SHA-1: 7bff:0281:48ef:11e9:f6fd:be76:15a5:572f:b5ab:4db8
+636/tcp  open     ldapssl
+989/tcp  open     ftps-data
+990/tcp  open     ftps
+992/tcp  open     telnets
+993/tcp  filtered imaps
+994/tcp  open     ircs
+995/tcp  filtered pop3s
+8443/tcp open     https-alt
+
+# Nmap done at Tue Nov 11 20:52:15 2025 -- 1 IP address (1 host up) scanned in 11.97 seconds
